@@ -9,6 +9,7 @@ class Monad m where
 
 :: Either e a =  BrainO e | BrainI a
 
+// I know this is not a real Monad. But... It works
 instance Monad (Either e) where
   (>>=) (BrainO e) _ = BrainO e
   (>>=) (BrainI a) next = next a
@@ -18,11 +19,11 @@ instance Monad (Either e) where
 // To make sure we can always return a (BrainOutput, Memory)
 fromBrainIO :: (Either (BrainOutput, Memory) (BrainInput, Memory)) -> (BrainOutput, Memory)
 fromBrainIO (BrainO e) = e
-fromBrainIO (BrainI (_, mem)) = (GainBall, mem)
+fromBrainIO (BrainI (inp, mem)) = (halt` inp, mem)
 
 // Create the team
 Team_SMonad :: SMonad_NumPlayers Home FootballField -> Team
-Team_SMonad nr_players difficulty home field
+Team_SMonad nr_players home field
 |   home==West              = westTeam
 |   otherwise               = eastTeam
 where
@@ -90,13 +91,37 @@ SMonad_keeper club home field position nr =
 
 // The Brains
 player_brain :: (BrainInput, Memory) -> (BrainOutput, Memory)
-player_brain input = fromBrainIO (pure input >>= try_to_score)
+player_brain input = fromBrainIO (pure input >>= parse_referee_decisions >>= try_to_score >>= advance >>= pass_ball >>= take_ball >>= move_to_position)
     where
+        parse_referee_decisions :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
+        parse_referee_decisions a=:(inp, mem) = BrainI a
+
         try_to_score :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
-        try_to_score ({me, referee}, memory) = BrainO (KickBall {vxy={direction=me.nose,velocity=(ms 299792458.0)}, vz=ms 1.0}, memory)
+        try_to_score a=:(inp, mem) = BrainI a
+
+        advance :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
+        advance a=:(inp, mem) = BrainI a
+
+        pass_ball :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
+        pass_ball a=:(inp, mem) = BrainI a
+
+        take_ball :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
+        take_ball a=:(inp, mem) = BrainI a
+
+        move_to_position :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
+        move_to_position a=:(inp, mem) = BrainI a
         
 keeper_brain :: (BrainInput, Memory) -> (BrainOutput, Memory)
-keeper_brain input = fromBrainIO (pure input >>= try_to_score)
+keeper_brain input = fromBrainIO (pure input >>= parse_referee_decisions >>= take_ball >>= pass_ball >>= move_to_position)
     where
-        try_to_score :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
-        try_to_score ({me, referee}, memory) = BrainO (KickBall {vxy={direction=me.nose,velocity=(ms 299792458.0)}, vz=ms 1.0}, memory)
+        parse_referee_decisions :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
+        parse_referee_decisions a=:(inp, mem) = BrainI a
+
+        take_ball :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
+        take_ball a=:(inp, mem) = BrainI a
+
+        pass_ball :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
+        pass_ball a=:(inp, mem) = BrainI a
+
+        move_to_position :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
+        move_to_position a=:(inp, mem) = BrainI a
