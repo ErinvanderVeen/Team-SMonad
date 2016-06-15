@@ -21,7 +21,7 @@ fromBrainIO (BrainO e) = e
 fromBrainIO (BrainI (_, mem)) = (GainBall, mem)
 
 // Create the team
-Team_SMonad :: SMonad_NumPlayers SMonad_Difficulty Home FootballField -> Team
+Team_SMonad :: SMonad_NumPlayers Home FootballField -> Team
 Team_SMonad nr_players difficulty home field
 |   home==West              = westTeam
 |   otherwise               = eastTeam

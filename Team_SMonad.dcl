@@ -12,10 +12,6 @@ import Team
 // Prefix to prevent collision with Team_Harmless
 :: SMonad_NumPlayers :== Int
 
-// The difficulty (between 0 and 1)
-// Prefix to prevent collision with Team_Harmless
-:: SMonad_Difficulty :== Real
+Team_SMonad :: SMonad_NumPlayers Home FootballField -> Team
 
-Team_SMonad :: SMonad_NumPlayers SMonad_Difficulty Home FootballField -> Team
-
-Team_SMonad_Pro :== Team_SMonad 11 1.0 
+Team_SMonad_Pro :== Team_SMonad 11
