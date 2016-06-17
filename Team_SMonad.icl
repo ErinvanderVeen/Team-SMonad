@@ -100,7 +100,10 @@ player_brain :: (BrainInput, Memory) -> (BrainOutput, Memory)
 player_brain input = fromBrainIO (pure input >>= update_mem >>= try_to_score >>= advance >>= take_ball >>= pass_ball >>= move_to_position)
     where
         try_to_score :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
-        try_to_score a=:(inp, mem) = BrainI a
+        try_to_score a=:(inp=:{me}, mem=:{home, field})
+        # close = dist_to_goal a <= m 15.0
+        | close = BrainO (KickBall {vxy = {direction = bearing zero (toPosition me) (centerOfGoal (other home) field), velocity = maxVelocityBallKick me}, vz = ms 1.0}, {mem & shot=True})
+        | otherwise = BrainI a
 
         advance :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
         advance a=:(inp, mem=:{home, field})
@@ -112,7 +115,8 @@ player_brain input = fromBrainIO (pure input >>= update_mem >>= try_to_score >>=
         pass_ball :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
         pass_ball a=:(inp=:{others, me, football}, mem)
         # have_ball = i_have_ball inp
-        | have_ball = trace_n "pass" (BrainO (KickBall {vxy = {direction = bearing zero (toPosition me) (toPosition (best_pass_option a)), velocity = maxVelocityBallKick me}, vz = ms 1.0}, {mem & shot = True}))
+        # target = best_pass_option a
+        | have_ball = trace_n "pass" (BrainO (KickBall {vxy = {direction = bearing zero (toPosition me) (toPosition (target)), velocity = ms (1.5 * (toReal (dist me.pos target.pos)))}, vz = ms 1.0}, {mem & shot = True}))
         | otherwise = BrainI a
 
         take_ball :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
@@ -124,11 +128,10 @@ player_brain input = fromBrainIO (pure input >>= update_mem >>= try_to_score >>=
         | otherwise = BrainI (inp, mem)
 
         move_to_position :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
-        move_to_position (inp=:{me, football}, mem)
-        # is_free = ballIsFree football
+        move_to_position a=:(inp=:{me, football}, mem)
         # closest = am_closest_to_ball (getBall inp) me (allies inp)
-        | is_free && closest = BrainO (fix (get_ball_location (getBall inp)) (maxGainReach me) (inp, mem))
-        | otherwise = BrainI (inp, mem)
+        | closest = trace_n "move_to_position" (BrainO (fix (get_ball_location (getBall inp)) (maxGainReach me) (inp, mem)))
+        | otherwise = BrainO (fix (scale_base_pos a) (m 2.0) (inp, mem))
         
 keeper_brain :: (BrainInput, Memory) -> (BrainOutput, Memory)
 keeper_brain input = fromBrainIO (pure input >>= update_mem >>= penalty >>= goalkick >>= take_ball >>= pass_ball >>= move_to_position)
@@ -140,8 +143,8 @@ keeper_brain input = fromBrainIO (pure input >>= update_mem >>= penalty >>= goal
         | otherwise = BrainI (inp, mem)
 
         goalkick :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
-        goalkick (inp=:{me}, mem=:{goalkick})
-        | goalkick = BrainO (afterfix (returnAI (KickBall {vxy = {direction = bearing zero (toPosition me) (toPosition (m 0.0, m 0.0)), velocity = maxVelocityBallKick me}, vz = maxVelocityBallKick me})) (getBall inp).ballPos.pxy (maxGainReach me) (inp, {mem & goalkick = ~goalkick}))
+        goalkick a=:(inp=:{me}, mem=:{goalkick})
+        | goalkick = BrainO (afterfix (returnAI (KickBall {vxy = {direction = bearing zero (toPosition me) (toPosition (best_pass_option a)), velocity = maxVelocityBallKick me}, vz = maxVelocityBallKick me})) (getBall inp).ballPos.pxy (maxGainReach me) (inp, {mem & goalkick = ~goalkick}))
         | otherwise = BrainI (inp, mem)
 
         take_ball :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
@@ -155,8 +158,8 @@ keeper_brain input = fromBrainIO (pure input >>= update_mem >>= penalty >>= goal
         | otherwise = BrainI (inp, mem)
 
         pass_ball :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
-        pass_ball (inp=:{me}, mem)
-        | i_have_ball inp = BrainO (KickBall {vxy={direction=bearing zero (toPosition me) (toPosition (m 0.0, m 0.0)), velocity=maxVelocityBallKick me}, vz=ms 1.5}, mem)
+        pass_ball a=:(inp=:{me}, mem)
+        | i_have_ball inp = BrainO (KickBall {vxy={direction=bearing zero (toPosition me) (toPosition (best_pass_option a)), velocity=maxVelocityBallKick me}, vz=ms 1.5}, mem)
         | otherwise = BrainI (inp, mem)
 
         move_to_position :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
@@ -215,11 +218,12 @@ best_pass_option (inp=:{others, me}, {home})
 // Add a weight to every footballer
 // The footballers will eventually be sorted on their weight
 # footballers = allies inp
+// We prefer players who are closer the the oponents goal
 # footballers = map (\x -> (if (home == West) (toReal x.pos.px) (~(toReal x.pos.px)), x)) footballers
-// We prefer footballers who are more near the center
-# footballers = map (\x -> (fst x - 0.5 * (abs (toReal ((snd x).pos.py))), snd x)) footballers
+// We prefer free players
+# footballers = map (\x -> (fst x + 1.5 * (toReal (dist_to_closest_axis inp)), snd x)) footballers
 // We prefer footballers who are closer to the footballer
-# footballers = map (\x -> (fst x - 0.25 * (toReal (dist (snd x) me)), snd x)) footballers
+# footballers = map (\x -> (fst x - 0.5 * (toReal (dist (snd x) me)), snd x)) footballers
 // Sort them based on the heuristic
 # footballer = maxListBy (\x -> \y -> (fst x < fst y)) footballers
 = snd footballer
@@ -229,3 +233,20 @@ am_closest_to_ball fb me rest = all ((<) (dist me.pos (get_ball_location fb))) [
 
 dist_to_closest_axis :: BrainInput -> Metre
 dist_to_closest_axis inp=:{me} = minList [dist footballer.pos (me.pos)\\ footballer <- axis inp]
+
+dist_to_goal :: (BrainInput, Memory) -> Metre
+dist_to_goal (inp=:{me}, mem=:{home, field}) = dist (centerOfGoal (other home) field) (me.pos)
+
+scale_base_pos :: (BrainInput, Memory) -> Position
+scale_base_pos (inp=:{me}, mem=:{home, field, base_pos})
+# ball_x = (get_ball_location (getBall inp)).px
+# ball_scale = (toReal (ball_x)) / (toReal (field.flength))
+# ball_scale = if (home == East) (~(ball_scale)) ball_scale
+# ball_scale = ball_scale + 0.7
+# ball_scale = 2.0 * ball_scale
+# offset = if (home == East) ((scale 0.5 field.flength) - base_pos.px) ((scale 0.5 field.flength) + base_pos.px)
+# offset = scale ball_scale offset
+//# offset = scale 1.5 offset
+# x = if (home == East) ((scale 0.5 field.flength) - offset) (~((scale 0.5 field.flength) - offset))
+= {px=x, py=base_pos.py}
+
