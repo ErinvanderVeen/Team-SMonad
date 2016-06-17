@@ -57,12 +57,11 @@ where
 base_TeamName_SMonad        :: String
 base_TeamName_SMonad        = "Soccer Monad"                              
 
-:: Memory               = { home :: !Home, base_pos :: Position, can_touch_ball :: Bool, penalty :: Bool, goalkick :: Bool, shot :: Bool, field :: FootballField}
+:: Memory               = { home :: !Home, base_pos :: Position, cant_touch_ball :: Bool, penalty :: Bool, goalkick :: Bool, shot :: Bool, field :: FootballField}
 
 SMonad_player :: !ClubName !Home !FootballField !Position !PlayersNumber -> Footballer
 SMonad_player club home footballfield position nr
     # bp = if (home == West) (position) ({px= ~position.px, py=position.py})
-    # ctb = home == West
     = 
     { playerID            = {clubName = club,playerNr=nr}
     , name                = "Monad " <+++ nr
@@ -74,13 +73,12 @@ SMonad_player club home footballfield position nr
     , effect              = Nothing
     , stamina             = max_stamina
     , health              = max_health
-    , brain               = { memory = {home=home, base_pos=bp, can_touch_ball=ctb, penalty=False, goalkick=False, shot=False, field=footballfield }, ai = player_brain}
+    , brain               = { memory = {home=home, base_pos=bp, cant_touch_ball=False, penalty=False, goalkick=False, shot=False, field=footballfield }, ai = player_brain}
     }
 
 SMonad_keeper :: !ClubName !Home !FootballField !Position !PlayersNumber -> Footballer
 SMonad_keeper club home footballfield position nr
     # bp = if (home == West) (position) ({px= ~position.px, py=position.py})
-    # ctb = home == West
     = 
     { playerID            = {clubName = club,playerNr=nr}
     , name                = "Monad " <+++ nr
@@ -92,7 +90,7 @@ SMonad_keeper club home footballfield position nr
     , effect              = Nothing
     , stamina             = max_stamina
     , health              = max_health
-    , brain               = { memory = {home=home, base_pos=bp, can_touch_ball=ctb, penalty=False, goalkick=False, shot=False, field = footballfield }, ai = keeper_brain}
+    , brain               = { memory = {home=home, base_pos=bp, cant_touch_ball=False, penalty=False, goalkick=False, shot=False, field = footballfield }, ai = keeper_brain}
     }
 
 // The Brains
@@ -107,7 +105,7 @@ player_brain input = fromBrainIO (pure input >>= update_mem >>= try_to_score >>=
 
         advance :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
         advance a=:(inp, mem=:{home, field})
-        # axis_close = toReal (dist_to_closest_axis inp) <= 5.0
+        # axis_close = toReal (dist_to_closest_axis inp) <= 2.0
         # have_ball = i_have_ball inp
         | ~axis_close && have_ball = BrainO (fix (centerOfGoal (other home) field) (m 9.0) (inp, mem))
         | otherwise = BrainI a
@@ -116,21 +114,24 @@ player_brain input = fromBrainIO (pure input >>= update_mem >>= try_to_score >>=
         pass_ball a=:(inp=:{others, me, football}, mem)
         # have_ball = i_have_ball inp
         # target = best_pass_option a
-        | have_ball = trace_n "pass" (BrainO (KickBall {vxy = {direction = bearing zero (toPosition me) (toPosition (target)), velocity = ms (1.5 * (toReal (dist me.pos target.pos)))}, vz = ms 1.0}, {mem & shot = True}))
+        | have_ball = BrainO (KickBall {vxy = {direction = bearing zero (toPosition me) (toPosition (target)), velocity = ms (1.5 * (toReal (dist me.pos target.pos)))}, vz = ms 1.0}, {mem & shot = True})
         | otherwise = BrainI a
 
         take_ball :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
-        take_ball (inp=:{me, football}, mem=:{shot})
+        take_ball a=:(inp=:{me, football}, mem=:{shot})
         # canGain = maxGainReach me >= dist me (getBall inp)
         # whb = we_have_ball inp
         # ball_direction = bearing (ball_direction (getBall inp)) (get_ball_location (getBall inp)) me
-        | canGain && ~whb && ~shot = trace_n "take" (BrainO (GainBall, mem))
+        # is_free = ballIsFree football
+        # canTackle = maxTackleReach me >= dist me (getBall inp)
+        | canGain && ~whb && ~shot && is_free = BrainO (GainBall, mem)
+        | canTackle && ~whb && ~is_free = BrainO (Tackle (who_has_ball a) max_velocity, mem)
         | otherwise = BrainI (inp, mem)
 
         move_to_position :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
-        move_to_position a=:(inp=:{me, football}, mem)
+        move_to_position a=:(inp=:{me, football}, mem=:{cant_touch_ball})
         # closest = am_closest_to_ball (getBall inp) me (allies inp)
-        | closest = trace_n "move_to_position" (BrainO (fix (get_ball_location (getBall inp)) (maxGainReach me) (inp, mem)))
+        | closest && ~cant_touch_ball = BrainO (fix (get_ball_location (getBall inp)) (maxGainReach me) (inp, mem))
         | otherwise = BrainO (fix (scale_base_pos a) (m 2.0) (inp, mem))
         
 keeper_brain :: (BrainInput, Memory) -> (BrainOutput, Memory)
@@ -169,12 +170,13 @@ keeper_brain input = fromBrainIO (pure input >>= update_mem >>= penalty >>= goal
         | otherwise = BrainO (afterfix (rotate (bearing me.nose (toPosition me) (toPosition (m 0.0, me.pos.py)))) mem.base_pos (m 2.0) (inp, mem))
 
 update_mem :: (BrainInput, Memory) -> Either (BrainOutput, Memory) (BrainInput, Memory)
-update_mem (inp=:{me, referee}, mem=:{home, base_pos, penalty, goalkick, shot})
+update_mem a=:(inp=:{me, referee}, mem=:{home, base_pos, penalty, goalkick, shot, cant_touch_ball})
 # new_memory = {mem & home = if (any isEndHalf referee) (other home) home,
                 base_pos = if (any isEndHalf referee) ({px = ~base_pos.px, py = base_pos.py}) base_pos,
                 penalty = any isPenalty referee || penalty,
                 goalkick = any isGoalKick referee || goalkick,
-                shot = dist (getBall inp) me > (m 2.0) && shot
+                shot = dist (getBall inp) me < (maxGainReach me) && shot,
+                cant_touch_ball = ref_cant_touch a || (cant_touch_ball && team_kicked_ball (axis inp))
             }
 = BrainI (inp, new_memory)
 
@@ -204,6 +206,9 @@ axis inp=:{others} = removeMembers others (allies inp)
 we_have_ball :: BrainInput -> Bool
 we_have_ball inp=:{football, me} = or [ballIsGainedBy x.playerID football \\ x <- (allies inp) ++ [me]]
 
+they_have_ball :: BrainInput -> Bool
+they_have_ball inp=:{football, me} = or [ballIsGainedBy x.playerID football \\ x <- (axis inp)]
+
 i_have_ball :: BrainInput -> Bool
 i_have_ball {me, football} = ballIsGainedBy me.playerID football
 
@@ -221,9 +226,9 @@ best_pass_option (inp=:{others, me}, {home})
 // We prefer players who are closer the the oponents goal
 # footballers = map (\x -> (if (home == West) (toReal x.pos.px) (~(toReal x.pos.px)), x)) footballers
 // We prefer free players
-# footballers = map (\x -> (fst x + 1.5 * (toReal (dist_to_closest_axis inp)), snd x)) footballers
+# footballers = map (\x -> (fst x + 2.5 * (toReal (dist_to_closest_axis inp)), snd x)) footballers
 // We prefer footballers who are closer to the footballer
-# footballers = map (\x -> (fst x - 0.5 * (toReal (dist (snd x) me)), snd x)) footballers
+# footballers = map (\x -> (fst x - 0.25 * (toReal (dist (snd x) me)), snd x)) footballers
 // Sort them based on the heuristic
 # footballer = maxListBy (\x -> \y -> (fst x < fst y)) footballers
 = snd footballer
@@ -242,11 +247,26 @@ scale_base_pos (inp=:{me}, mem=:{home, field, base_pos})
 # ball_x = (get_ball_location (getBall inp)).px
 # ball_scale = (toReal (ball_x)) / (toReal (field.flength))
 # ball_scale = if (home == East) (~(ball_scale)) ball_scale
-# ball_scale = ball_scale + 0.7
-# ball_scale = 2.0 * ball_scale
+# ball_scale = ball_scale + 0.5
+# ball_scale = 3.0 * ball_scale
 # offset = if (home == East) ((scale 0.5 field.flength) - base_pos.px) ((scale 0.5 field.flength) + base_pos.px)
 # offset = scale ball_scale offset
-//# offset = scale 1.5 offset
 # x = if (home == East) ((scale 0.5 field.flength) - offset) (~((scale 0.5 field.flength) - offset))
 = {px=x, py=base_pos.py}
 
+who_has_ball :: (BrainInput, Memory) -> FootballerID
+who_has_ball (inp=:{football, others}, mem) = hd (filter (\x -> ballIsGainedBy x football) (map player_identity others))
+
+ref_cant_touch :: (BrainInput, Memory) -> Bool
+ref_cant_touch ({referee}, mem) = any (no_touch_pred mem) referee
+
+no_touch_pred :: Memory RefereeAction -> Bool
+no_touch_pred {home} (DirectFreeKick h _) = h <> home
+no_touch_pred {home} (Corner h _) = h <> home
+no_touch_pred {home} (ThrowIn h _) = h <> home
+no_touch_pred {home} (Penalty h) = h <> home
+no_touch_pred {home} (CenterKick h) = h <> home
+no_touch_pred _ _ = False
+
+team_kicked_ball :: [Footballer] -> Bool
+team_kicked_ball enemies = or [isKickedBall (fromJust enemy.effect) \\ enemy <- enemies | isJust enemy.effect]
